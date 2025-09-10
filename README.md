@@ -1,6 +1,5 @@
 # AutoMMM
 
----
 
 ## 📊 Workflow Overview
 
@@ -118,7 +117,7 @@ If you use this repository, please cite the underlying software and our work:
   Yang, Q., & Zhong, C. (2006). *Molecular Simulation of Carbon Dioxide/Methane/Hydrogen Mixture Adsorption in Metal−Organic Frameworks.* **J. Phys. Chem. B, 110**(36), 17776–17783. https://doi.org/10.1021/jp0628753
   
 If you use results or figures generated with this repository, please also cite:  
-**Díaz Márquez, A. et al. (2025).**  (In preparation).  
+**Díaz Márquez, A. et al. (2025).**  (Submitted).  
 
 
 ## 👤 Author
