@@ -96,7 +96,7 @@ Gas dynamics: Green-Kubo diffusivity, angular reorientation profiles.
 
 ## 🛠 Requirements
 
-- [**CADSS**](https://cadss.example.org) – for Grand Canonical Monte Carlo (GCMC) adsorption simulations  
+- [**CADSS**] – for Grand Canonical Monte Carlo (GCMC) adsorption simulations  
 - [**LAMMPS**](https://www.lammps.org/) – for Molecular Dynamics simulations  
 - **Python 3.x** with the following packages:
   - [NumPy](https://numpy.org/)  
@@ -109,6 +109,14 @@ Gas dynamics: Green-Kubo diffusivity, angular reorientation profiles.
 
 ## 📖 Citation
 
+If you use this repository, please cite the underlying software and our work:
+
+- Plimpton, S. (1995). *Fast Parallel Algorithms for Short-Range Molecular Dynamics.* **J. Comput. Phys. 117**(1), 1–19. https://doi.org/10.1006/jcph.1995.1039  
+- McGibbon, R. T., Beauchamp, K. A., Harrigan, M. P., Klein, C., Swails, J. M., Hernández, C. X., ... & Pande, V. S. (2015). *MDTraj: A Modern Open Library for the Analysis of Molecular Dynamics Trajectories.* **Biophys. J. 109**(8), 1528–1532. https://doi.org/10.1016/j.bpj.2015.08.015  
+- Hagberg, A., Swart, P., & Chult, D. S. (2008). *Exploring Network Structure, Dynamics, and Function using NetworkX.* In Proceedings of the 7th Python in Science Conference (SciPy 2008).  
+- **CADSS reference:**  
+  Yang, Q., & Zhong, C. (2006). *Molecular Simulation of Carbon Dioxide/Methane/Hydrogen Mixture Adsorption in Metal−Organic Frameworks.* **J. Phys. Chem. B, 110**(36), 17776–17783. https://doi.org/10.1021/jp0628753
+  
 If you use results or figures generated with this repository, please also cite:  
 **Díaz Márquez, A. et al. (2025).**  (In preparation).  
 
