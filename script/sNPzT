@@ -1,0 +1,154 @@
+#!/bin/bash
+
+# Print
+echo "
+units           real
+atom_style      full
+dimension        3
+boundary        p p p
+" > 21zstep.in
+
+
+nmof=$(grep "atoms" $1 | awk  '{print $1}')
+
+echo "
+#System definition
+read_data combine.lmps
+group mof    id   1:$nmof
+group polymer subtract all mof" >> 21zstep.in
+
+num1=$(grep -n "pol.lmps add append" combine.in | cut -f1 -d:)
+num2=$(grep -n "write_data combine.lmps" combine.in | cut -f1 -d:)
+num1=$(($num1+2))
+num2=$(($num2-1))
+
+echo "
+$(sed -n "$num1","$num2"'{p;}' combine.in)" >> 21zstep.in
+
+echo '
+dielectric       1.0
+neighbor         0.5 bin
+neigh_modify     delay 0 every 1 check yes
+run_style        verlet
+
+reset_timestep   0
+timestep 1
+# Output
+thermo_style custom step vol temp press etotal evdwl ecoul ebond eangle edihed eimp density
+thermo $(1000/dt)
+fix mom all momentum 100 linear 1 1 1
+#dump 1 all dcd $(1000/dt) 21s.dcd
+#dump_modify 1 sort id
+
+# 0
+#fix 1 all npt temp 300 300 $(100.0*dt) z 1 1 $(100.0*dt)
+#run $(50000/dt)
+#unfix 1
+
+# 1
+fix 1 all nvt temp 600 600 $(100.0*dt) 
+velocity all create 600 58447419
+run $(10000/dt)
+unfix 1
+# 2
+fix 1 all nvt temp 300 300 $(100.0*dt)
+run $(20000/dt)
+unfix 1
+# 3 0.02*Pmax
+fix 1 all npt temp 300 300 $(100.0*dt) z 1000 1000 $(100.0*dt)
+run $(50000/dt)
+unfix 1
+# 4
+fix 1 all nvt temp 600 600 $(100.0*dt)
+run $(50000/dt)
+unfix 1
+# 5
+fix 1 all nvt temp 300 300 $(100.0*dt)
+run $(100000/dt)
+unfix 1
+# 6 0.6*Pmax
+fix 1 all npt temp 300 300 $(100.0*dt) z 30000 30000 $(100.0*dt)
+run $(20000/dt)
+unfix 1
+# 7
+fix 1 all nvt temp 600 600 $(100.0*dt)
+run $(50000/dt)
+unfix 1
+# 8
+fix 1 all nvt temp 300 300 $(100.0*dt)
+run $(100000/dt)
+unfix 1
+# 9 Pmax=50000
+fix 1 all npt temp 300 300 $(100.0*dt) z 50000 50000 $(100.0*dt)
+run $(20000/dt)
+unfix 1
+# 10
+fix 1 all nvt temp 600 600 $(100.0*dt)
+run $(20000/dt)
+unfix 1
+# 11
+fix 1 all nvt temp 300 300 $(100.0*dt)
+run $(100000/dt)
+unfix 1
+# 12 0.5*Pmax
+fix 1 all npt temp 300 300 $(100.0*dt) z 25000 25000 $(100.0*dt)
+run $(5000/dt)
+unfix 1
+# 13
+fix 1 all nvt temp 600 600 $(100.0*dt)
+run $(5000/dt)
+unfix 1
+# 14
+fix 1 all nvt temp 300 300 $(100.0*dt)
+run $(10000/dt)
+unfix 1
+# 15 0.1*Pmax
+fix 1 all npt temp 300 300 $(100.0*dt) z 5000 5000 $(100.0*dt)
+run $(5000/dt)
+unfix 1
+# 16
+fix 1 all nvt temp 600 600 $(100.0*dt)
+run $(5000/dt)
+unfix 1
+# 17
+fix 1 all nvt temp 300 300 $(100.0*dt)
+run $(10000/dt)
+unfix 1
+# 18 0.01*Pmax
+fix 1 all npt temp 300 300 $(100.0*dt) z 500 500 $(100.0*dt)
+run $(85000/dt)
+unfix 1
+# 19
+fix 1 all nvt temp 600 600 $(100.0*dt)
+run $(5000/dt)
+unfix 1
+# 20
+fix 1 all nvt temp 300 300 $(100.0*dt)
+run $(10000/dt)
+unfix 1
+# 21 Pfinal=1 bar
+fix 1 all npt temp 300 300 $(100.0*dt) z 1 1 $(100.0*dt)
+run $(800000/dt)
+unfix 1
+#undump 1
+
+# Data file output
+write_data       final-interface.lmps
+write_dump all custom final-interface.dump id mol type q xu yu zu
+
+timestep 1
+fix 1 all nvt temp 300 300 $(100.0*dt)
+dump 2 all dcd $(10000/dt) DIM.dcd
+dump_modify 2 sort id
+run $(2000000/dt)
+unfix 1  
+undump 2
+
+' >> 21zstep.in
+
+num1=$(grep -n "zlo zhi" $2 | cut -f1 -d:)
+num2=$(grep -n Atoms $2 | cut -f1 -d:)
+num1=$(($num1+1))
+num2=$(($num2-2))
+sed -i "$num1","$num2"'{d;}' combine.lmps
+sed -i 's"special_bonds   lj/coul 0.0 0.0 1"special_bonds   lj/coul 0.0 0.0 1 dihedral yes"g' 21zstep.in

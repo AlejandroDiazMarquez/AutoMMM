@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# --- CONFIG ---
+MOFs=("ALFFIVE" "CALF20" "MIL53NH2" "Zrfcufum")  # fixed extra comma
+# If you want to limit polymers, set this and UNCOMMENT the 'for f in "${polymers[@]}"' loop below.
+# polymers=("6FDA-DAM")
+
+ALL_POLS_DIR="all_pols"
+SCRIPTS_DIR="scripts"
+REPLICAS=10
+
+# --- SANITY CHECKS ---
+[[ -d "$ALL_POLS_DIR" ]] || { echo "ERROR: '$ALL_POLS_DIR' not found."; exit 1; }
+[[ -d "$SCRIPTS_DIR"   ]] || { echo "ERROR: '$SCRIPTS_DIR' not found."; exit 1; }
+
+# nullglob so 'for f in *' doesn't iterate over literal '*'
+shopt -s nullglob
+
+# Generate an 8-digit random integer (00..99,999,999)
+rand8() { printf "%08d" "$(( RANDOM % 100000000 ))"; }
+
+for folder in "${MOFs[@]}"; do
+  # Ensure target MOF folder exists
+  [[ -d "$folder" ]] || { echo "WARN: MOF folder '$folder' not found, skipping."; continue; }
+
+  # Iterate over polymer packs in all_pols (or use the polymers array instead)
+  pushd "$ALL_POLS_DIR" >/dev/null
+
+  # For using the array instead of wildcard, comment the next line and uncomment the two after it.
+  polymer_list=( * )
+  # polymer_list=( "${polymers[@]}" )
+
+  if (( ${#polymer_list[@]} == 0 )); then
+    echo "WARN: No entries found in '$ALL_POLS_DIR' to use as polymers. Skipping '$folder'."
+    popd >/dev/null
+    continue
+  fi
+
+  for f in "${polymer_list[@]}"; do
+    # If using wildcard, skip non-files you don't want (optional)
+    # [[ -f "$f" ]] || { echo "INFO: Skipping non-file '$f'"; continue; }
+
+    echo "Polymer: $f"
+    popd >/dev/null
+
+    # Work inside the MOF folder
+    pushd "$folder" >/dev/null
+
+    for (( i=1; i<=REPLICAS; i++ )); do
+      fil="${folder}-${f}_${i}"
+
+      if [[ -e "$fil/DIM.dcd" ]]; then
+        echo "[OK] $fil contains DIM.dcd"
+        continue
+      fi
+
+      echo "[SETUP] Preparing $fil"
+      rm -rf -- "$fil"
+      mkdir -p -- "$fil"
+
+      pushd "$fil" >/dev/null
+
+      # Copy template contents from parent (exclude the new dir itself)
+      # If you want to be explicit, replace '../*' with specific files.
+      cp -p ../* . 2>/dev/null || true
+
+      # Bring in polymer pack and scripts
+      if [[ -e "../../$ALL_POLS_DIR/$f" ]]; then
+        cp -p "../../$ALL_POLS_DIR/$f" ./pack.lmps
+      else
+        echo "WARN: Polymer source '../../$ALL_POLS_DIR/$f' not found for $fil"
+      fi
+
+      cp -p ../../"$SCRIPTS_DIR"/* . 2>/dev/null || {
+        echo "WARN: No files in '../../$SCRIPTS_DIR' to copy."
+      }
+
+      # Update random seeds in input files if they exist
+      if [[ -f sreshape ]]; then
+        sed -i "s/velocity[[:space:]]\+all[[:space:]]\+create[[:space:]]\+300[[:space:]]\+[0-9]\+/velocity         all create 300 $(rand8)/" sreshape
+      else
+        echo "WARN: 'sreshape' not found in $fil"
+      fi
+
+      if [[ -f sNPzT ]]; then
+        sed -i "s/velocity[[:space:]]\+all[[:space:]]\+create[[:space:]]\+600[[:space:]]\+[0-9]\+/velocity all create 600 $(rand8)/" sNPzT
+      else
+        echo "WARN: 'sNPzT' not found in $fil"
+      fi
+
+      # Update run script with job name
+      if [[ -f run ]]; then
+        sed -i "s/runmod/${folder}-${f}/g" run
+        # Submit if sbatch exists
+        if command -v sbatch >/dev/null 2>&1; then
+          sbatch run
+        else
+          echo "INFO: 'sbatch' not found; skipping submission for $fil"
+        fi
+      else
+        echo "WARN: 'run' not found in $fil; not submitting."
+      fi
+
+      popd >/dev/null  # out of $fil
+    done
+
+    popd >/dev/null  # out of $folder
+    pushd "$ALL_POLS_DIR" >/dev/null
+  done
+
+  popd >/dev/null  # out of all_pols
+done
+

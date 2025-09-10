@@ -1,0 +1,20 @@
+#!/bin/bash
+#SBATCH --cpus-per-task=1
+#SBATCH --partition=fun,damp
+#SBATCH --output=slurm.log
+#SBATCH --error=slurm.err
+#SBATCH --time=10000:00:00
+#SBATCH --job-name=Frames
+
+echo "The used cpu number is $SLURM_NTASKS"
+echo "The used node name is $SLURM_JOB_NODELIST"
+echo "The job ID is $SLURM_JOB_ID"
+echo "The job started at $(date)"
+echo "Working directory: $SLURM_SUBMIT_DIR"
+
+# Load necessary modules, if needed
+# module load module_name
+
+cd $SLURM_SUBMIT_DIR
+
+python Frames5.py 

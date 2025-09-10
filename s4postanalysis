@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# --- CONFIG ---
+# Run only KAUST8-ML by default. To run all MOFs, set: folders=()
+folders=("ALFFIVE" "CALF20" "MIL53NH2" "Zrfcufum")  # fixed extra comma
+REQUIRED_FILE="DIM.dcd"   # only run sall when this exists in the system dir
+
+# --- PATHS ---
+ROOT="$(pwd)"
+SCRIPTS_DIR="$ROOT/scripts"
+SALL="sall"
+
+# --- SANITY ---
+[[ -d "$SCRIPTS_DIR" ]] || { echo "ERROR: '$SCRIPTS_DIR' not found."; exit 1; }
+[[ -f "$SCRIPTS_DIR/$SALL" ]] || { echo "ERROR: '$SALL' not found in '$SCRIPTS_DIR'."; exit 1; }
+
+# Auto-detect MOF folders if none provided
+if (( ${#folders[@]} == 0 )); then
+  mapfile -d '' -t folders < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d \
+                               ! -name "scripts" ! -name "all_pols" ! -name "inputs_msd" -print0)
+  for i in "${!folders[@]}"; do folders[$i]="${folders[$i]##*/}"; done
+fi
+
+for folder in "${folders[@]}"; do
+  [[ -d "$folder" ]] || { echo "WARN: MOF folder '$folder' not found. Skipping."; continue; }
+  echo "==> MOF: $folder"
+  pushd "$folder" >/dev/null
+
+  # immediate subdirectories (systems like MOF-POLY_rep)
+  mapfile -d '' -t systems < <(find . -mindepth 1 -maxdepth 1 -type d -print0)
+  if (( ${#systems[@]} == 0 )); then
+    echo "INFO: No subdirectories in $folder."
+    popd >/dev/null
+    continue
+  fi
+
+  for sysdir in "${systems[@]}"; do
+    base="${sysdir#./}"
+
+    # require DIM.dcd
+    if [[ ! -f "$sysdir/$REQUIRED_FILE" ]]; then
+      # echo "SKIP: $base (no $REQUIRED_FILE)"
+      continue
+    fi
+
+    echo "--> Running 'sall' in $base"
+    pushd "$sysdir" >/dev/null
+
+    # copy sall from scripts and run it
+    cp -p "$SCRIPTS_DIR/$SALL" .
+    chmod +x "./$SALL" 2>/dev/null || true
+    ./"$SALL"
+
+    popd >/dev/null
+  done
+
+  popd >/dev/null
+done
+
+echo "Done."
+

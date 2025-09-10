@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# --- CONFIG ---
+# Leave empty to auto-detect all MOF folders at repo root (excluding scripts/ and all_pols/)
+#folders=()   # e.g.: folders=("ALFFIVE" "Zr-fcu" "MIL53" "KAUST8-ML")
+folders=("ALFFIVE" "CALF20" "MIL53NH2" "Zrfcufum")  # fixed extra comma
+
+
+# Leave empty to run on ALL polymer/system dirs; otherwise only names containing any of these substrings
+POLY_PATTERNS=("6FDA-DAM") 
+
+REFRESH_GCMC=false   # set to true to delete and recreate existing GCMC dirs
+
+# Script files expected in $ROOT/scripts
+GENERATOR_PY="input_generator-cadss-v3.py"
+RUNNER_SH="run-cadss-V3-slurm_alejandro.sh"
+SUMMARY_SH="get_summary.sh"
+
+# --- ENV / SANITY ---
+ROOT="$(pwd)"
+SCRIPTS_DIR="$ROOT/scripts"
+
+[[ -d "$SCRIPTS_DIR" ]] || { echo "ERROR: Scripts dir '$SCRIPTS_DIR' not found."; exit 1; }
+[[ -f "$SCRIPTS_DIR/$GENERATOR_PY" ]] || { echo "ERROR: Missing $GENERATOR_PY in scripts."; exit 1; }
+[[ -f "$SCRIPTS_DIR/$RUNNER_SH"   ]] || { echo "ERROR: Missing $RUNNER_SH in scripts."; exit 1; }
+[[ -f "$SCRIPTS_DIR/$SUMMARY_SH"  ]] || { echo "ERROR: Missing $SUMMARY_SH in scripts."; exit 1; }
+
+# Pick a Python
+if command -v python3 >/dev/null 2>&1; then PY=python3
+elif command -v python  >/dev/null 2>&1; then PY=python
+else echo "ERROR: No python interpreter found."; exit 1; fi
+
+# --- HELPERS ---
+match_any_pattern() {
+  local name="$1"
+  # If no patterns, match everything
+  if (( ${#POLY_PATTERNS[@]} == 0 )); then
+    return 0
+  fi
+  # If there are patterns, match any of them
+  for pat in "${POLY_PATTERNS[@]}"; do
+    [[ "$name" == *"$pat"* ]] && return 0
+  done
+  return 1
+}
+
+# Auto-detect MOF folders if none provided
+if (( ${#folders[@]} == 0 )); then
+  mapfile -d '' -t folders < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d \
+                               ! -name "scripts" ! -name "all_pols" -print0)
+  # Convert to basenames
+  for i in "${!folders[@]}"; do folders[$i]="${folders[$i]##*/}"; done
+fi
+
+# --- MAIN ---
+for folder in "${folders[@]}"; do
+  [[ -d "$folder" ]] || { echo "WARN: Folder '$folder' not found. Skipping."; continue; }
+  echo "==> In MOF folder: $folder"
+  pushd "$folder" >/dev/null
+
+  # Collect immediate subdirectories (each represents a system like MOF-POLY_rep)
+  mapfile -d '' -t directories < <(find . -mindepth 1 -maxdepth 1 -type d -print0)
+  if (( ${#directories[@]} == 0 )); then
+    echo "INFO: No subdirectories in $folder."
+    popd >/dev/null
+    continue
+  fi
+
+  for dir in "${directories[@]}"; do
+    base="$(basename "$dir")"
+
+    # Require DIM.dcd (only proceed once MD finished)
+    if [[ ! -f "$dir/DIM.dcd" ]]; then
+      # echo "SKIP: $base (no DIM.dcd)"
+      continue
+    fi
+
+    # Filter by polymer patterns (or pass all if none specified)
+    if ! match_any_pattern "$base"; then
+      # echo "SKIP: $base (doesn't match patterns)"
+      continue
+    fi
+
+    echo "--> Preparing GCMC for $base"
+    pushd "$dir" >/dev/null
+
+    if [[ -d GCMC ]]; then
+      if [[ "$REFRESH_GCMC" == true ]]; then
+        echo "    Refreshing existing GCMC/"
+        rm -rf -- GCMC
+      else
+        echo "    GCMC/ exists; leaving as-is (set REFRESH_GCMC=true to recreate)."
+      fi
+    fi
+
+    if [[ ! -d GCMC ]]; then
+      mkdir -p GCMC
+      pushd GCMC >/dev/null
+
+      # Copy scripts
+      cp -p "$SCRIPTS_DIR/$GENERATOR_PY" .
+      cp -p "$SCRIPTS_DIR/$RUNNER_SH"   .
+      cp -p "$SCRIPTS_DIR/$SUMMARY_SH"  .
+
+      # Substitute placeholder 'Systema' with directory name
+      sed -i "s|Systema|${base}|g" "$GENERATOR_PY"
+      sed -i "s|Systema|${base}|g" "$RUNNER_SH"
+
+      # Run
+      "$PY" "$GENERATOR_PY"
+      bash "$RUNNER_SH"
+
+      popd >/dev/null
+    fi
+
+    popd >/dev/null
+  done
+
+  popd >/dev/null
+done

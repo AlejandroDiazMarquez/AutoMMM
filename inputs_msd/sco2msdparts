@@ -1,0 +1,504 @@
+#!/bin/bash
+#!/bin/bash
+
+sim_run=$5
+partition=$6
+run=$((partition * 1000000))
+echo "$sim_run,$partition"
+
+for (( sim=0; sim<sim_run; sim+=partition )); do
+	# Print to combine.in
+	echo "
+units           real
+atom_style      full
+dimension        3
+boundary        p p p
+" > combine.in
+	
+	if [ $sim -eq 0 ]; then
+	    echo "read_data       CO2_all_dummies.lmps" >> combine.in
+	else
+	    echo "read_restart       restart_$sim" >> combine.in
+	fi
+	
+	echo "pair_style      lj/cut/coul/long 12.000" >> combine.in
+	 
+	# Read both files parameters
+	nt=$(awk '/atom types/ {print '\$1'}' $1)
+	nb=$(awk '/bond types/ {print '\$1'}' $1)
+	na=$(awk '/angle types/ {print '\$1'}' $1)
+	nd=$(awk '/dihedral types/ {print '\$1'}' $1)
+	ni=$(awk '/improper types/ {print '\$1'}' $1)
+	nt2=$(awk '/atom types/ {print '\$1'}' $2)
+	nb2=$(awk '/bond types/ {print '\$1'}' $2)
+	na2=$(awk '/angle types/ {print '\$1'}' $2)
+	nd2=$(awk '/dihedral types/ {print '\$1'}' $2)
+	ni2=$(awk '/improper types/ {print '\$1'}' $2)
+	if [ ! -n "$ni" ]
+	then
+	 ni=0
+	fi
+	#Check if there are impropers or 0
+	if [ ! -n "$ni2" ]
+	then
+	 ni2=0
+	fi
+	nt3=$(($nt + $nt2))
+	nb3=$(($nb + $nb2))
+	na3=$(($na + $na2))
+	nd3=$(($nd + $nd2))
+	ni3=$(($ni + $ni2))
+	
+	echo " $nt3 $nb3 $na3 $nd3 $ni3"
+	
+	# Print masses
+	grep -wns Masses $1 -A $(($nt+1)) | awk '{print $2}' > out
+	grep -wns Masses $2 -A $(($nt2+1)) | awk '{print $2}' >> out
+	sed -i '/^$/d' out
+	start=1
+	i=$start
+	while [[ $i -le $nt3 ]]
+	do
+	echo "mass $i" >> outn
+	    ((i = i + 1))
+	done
+	paste  outn out >> combine.in 
+	echo "mass $(($i)) 12.01
+mass $(($i+1)) 15.9994
+mass $(($i+2)) 12.01
+mass $(($i+3)) 15.9994" >> combine.in
+	rm out*
+	
+	# Print pairs
+	grep -wns Pair Coeffs $1 -A $(($nt+1)) | awk  '{$1="";print $0}' > out
+	sed -i '1,2d' out
+	grep -wns Pair Coeffs $2 -A $(($nt2+1)) | awk '{$1="";print $0}' > out2
+	sed -i '1,2d' out2
+	cat out out2 > out3
+	start=1
+	i=$start
+	while [[ $i -le $nt3 ]]
+	do
+	echo "pair_coeff $i $i" >> outn
+	    ((i = i + 1))
+	done
+	paste  outn out3 >> combine.in 
+	echo "pair_coeff $(($i+0)) $(($i+0)) 0.05764 2.757
+pair_coeff $(($i+1)) $(($i+1)) 0.16488 3.033
+pair_coeff $(($i+2)) $(($i+2)) 0.05764 2.757
+pair_coeff $(($i+3)) $(($i+3)) 0.16488 3.033" >> combine.in
+	pcC=$(($i+0))
+	pcO=$(($i+1))
+	pcC2=$(($i+2))
+	pcO2=$(($i+3))
+	rm out*
+	
+	# Print bonds
+	var1=$(grep -wns Bond Coeffs $1 | awk  '{$1=$2=$3="";print $0}')
+	var2=$(grep -wns Bond Coeffs $2 | awk  '{$1=$2=$3="";print $0}')
+	if [ "$var1" = "$var2" ]; then
+	echo "
+bond_style     $var1
+	" >> combine.in
+	else
+	echo "
+bond_style      hybrid $var1 $var2
+	" >> combine.in
+	fi
+	grep -wns Bond Coeffs $1 -A $(($nb+1)) | awk  '{$1="";print $0}' > out
+	sed -i '1,2d' out
+	grep -wns Bond Coeffs $2 -A $(($nb2+1)) | awk '{$1="";print $0}' > out2
+	sed -i '1,2d' out2
+	cat out out2 > out3
+	start=1
+	i=$start
+	while [[ $i -le $nb3 ]]
+	do
+	echo "bond_coeff $i" >> outn
+	    ((i = i + 1))
+	done
+	paste  outn out3 >> combine.in 
+	echo "bond_coeff $(($i+0))  295.644 1.149
+bond_coeff $(($i+1))  295.644 1.149" >> combine.in
+	bnum=$(($i+0))
+	bnum1=$(($i+1))
+	rm out*
+	
+	# Print angles
+	var1=$(grep -wns Angle Coeffs $1 | awk  '{$1=$2=$3="";print $0}')
+	var2=$(grep -wns Angle Coeffs $2 | awk  '{$1=$2=$3="";print $0}')
+	if [ "$var1" = "$var2" ]; then
+		echo "
+angle_style     $var1
+		" >> combine.in
+		grep -wns Angle Coeffs $1 -A $(($na+1)) | awk  '{$1="";print $0}' > out
+		grep -wns Angle Coeffs $2 -A $(($na2+1)) | awk '{$1="";print $0}' > out2
+	else 
+		var3=$(grep -wns angle_style $3 | awk  '{print $2}')
+		if [ "$var3" = "hybrid" ]; then
+			var4=$(grep -wns angle_style $3 | awk  '{$1=$2="";print $0}')
+			echo "
+angle_style      hybrid $var4 $var2
+			" >> combine.in
+			grep -wns Angle Coeffs $4 -A $(($na+1)) | awk  '{$1=$2="";print $0}' > out
+			grep -wns Angle Coeffs $2 -A $(($na2+1)) | awk '{$1="";print $0}' > out2
+			start=-1
+			i=$start
+			while [[ $i -le $na2 ]]
+			do
+				echo "$var2" >> out3
+				((i = i + 1))
+			done
+			paste out3 out2 > out4
+			mv out4 out2
+			rm out3
+		else
+			echo "
+angle_style      hybrid $var1 $var2
+			" >> combine.in
+			grep -wns Angle Coeffs $4 -A $(($na+1)) | awk  '{$1=$2="";print $0}' > out
+			grep -wns Angle Coeffs $2 -A $(($na2+1)) | awk '{$1="";print $0}' > out2
+			start=-1
+			i=$start
+			while [[ $i -le $na ]]
+			do
+				echo "$var1" >> out3
+				((i = i + 1))
+			done
+			paste out3 out > out4
+			mv out4 out
+			rm out3
+			start=-1
+			i=$start
+			while [[ $i -le $na2 ]]
+			do
+				echo "$var2" >> out3
+				((i = i + 1))
+			done
+			paste out3 out2 > out4
+			mv out4 out2
+			rm out3
+		fi
+	fi
+	sed -i '1,2d' out
+	sed -i '1,2d' out2
+	cat out out2 > out3
+	start=1
+	i=$start
+	while [[ $i -le $na3 ]]
+	do
+	echo "angle_coeff $i" >> outn
+	    ((i = i + 1))
+	done
+	paste  outn out3 >> combine.in 
+	echo "angle_coeff $(($i+0)) harmonic 147.5 180.00
+angle_coeff $(($i+1)) harmonic 147.5 180.00" >> combine.in
+	anum=$(($i+0))
+	anum1=$(($i+1))
+	rm out*
+	
+	# Print dihedral
+	var1=$(grep -wns Dihedral Coeffs $1 | awk  '{$1=$2=$3="";print $0}')
+	var2=$(grep -wns Dihedral Coeffs $2 | awk  '{$1=$2=$3="";print $0}')
+	if [ "$var1" = "$var2" ]; then
+		echo "
+dihedral_style     $var1
+		" >> combine.in
+		grep -wns Dihedral Coeffs $1 -A $(($nd+1)) | awk  '{$1="";print $0}' > out
+		grep -wns Dihedral Coeffs $2 -A $(($nd2+1)) | awk '{$1="";print $0}' > out2
+	else 
+		var3=$(grep -wns dihedral_style $3 | awk  '{print $2}')
+		if [ "$var3" = "hybrid" ]; then
+			var4=$(grep -wns dihedral_style $3 | awk  '{$1=$2="";print $0}')
+			echo "
+dihedral_style      hybrid $var4 $var2
+			" >> combine.in
+			grep -wns Dihedral Coeffs $4 -A $(($nd+1)) | awk  '{$1=$2="";print $0}' > out
+			grep -wns Dihedral Coeffs $2 -A $(($nd2+1)) | awk '{$1="";print $0}' > out2
+			start=-1
+			i=$start
+			while [[ $i -le $nd2 ]]
+			do
+				echo "$var2" >> out3
+				((i = i + 1))
+			done
+			paste out3 out2 > out4
+			mv out4 out2
+			rm out3
+		else
+			echo "
+dihedral_style      hybrid $var1 $var2
+			" >> combine.in
+			grep -wns Dihedral Coeffs $4 -A $(($nd+1)) | awk  '{$1=$2="";print $0}' > out
+			grep -wns Dihedral Coeffs $2 -A $(($nd2+1)) | awk '{$1="";print $0}' > out2
+			start=-1
+			i=$start
+			while [[ $i -le $nd ]]
+			do
+				echo "$var1" >> out3
+				((i = i + 1))
+			done
+			paste out3 out > out4
+			mv out4 out
+			rm out3
+			start=-1
+			i=$start
+			while [[ $i -le $nd2 ]]
+			do
+				echo "$var2" >> out3
+				((i = i + 1))
+			done
+			paste out3 out2 > out4
+			mv out4 out2
+			rm out3
+		fi
+	fi
+	sed -i '1,2d' out
+	sed -i '1,2d' out2
+	cat out out2 > out3
+	start=1
+	i=$start
+	while [[ $i -le $nd3 ]]
+	do
+	echo "dihedral_coeff $i" >> outn
+	    ((i = i + 1))
+	done
+	paste  outn out3 >> combine.in 
+	rm out*
+	
+	
+	# Print improper
+	var00=$(grep  "improper types" $1 | awk  '{print $1}')
+	var01=$(grep  "improper types" $2 | awk  '{print $1}')
+	if [ -n "$var00" ] && [ -n "$var01" ]; then
+		var1=$(grep -wns Improper Coeffs $1 | awk  '{$1=$2=$3="";print $0}')
+		var2=$(grep -wns Improper Coeffs $2 | awk  '{$1=$2=$3="";print $0}')
+		if [ "$var1" = "$var2" ]; then
+			echo "
+improper_style     $var1
+			" >> combine.in
+			grep -wns Improper Coeffs $1 -A $(($ni+1)) | awk  '{$1="";print $0}' > out
+			grep -wns Improper Coeffs $2 -A $(($ni2+1)) | awk '{$1="";print $0}' > out2
+		else 
+			var3=$(grep -wns improper_style $3 | awk  '{print $2}')
+			if [ "$var3" = "hybrid" ]; then
+				var4=$(grep -wns improper_style $3 | awk  '{$1=$2="";print $0}')
+				echo "
+improper_style      hybrid $var4 $var2
+				" >> combine.in
+				grep -wns Improper Coeffs $4 -A $(($ni+1)) | awk  '{$1=$2="";print $0}' > out
+				grep -wns Improper Coeffs $2 -A $(($ni2+1)) | awk '{$1="";print $0}' > out2
+				start=-1
+				i=$start
+				while [[ $i -le $ni2 ]]
+				do
+					echo "$var2" >> out3
+					((i = i + 1))
+				done
+				paste out3 out2 > out4
+				mv out4 out2
+				rm out3
+			else
+				echo "
+improper_style      hybrid $var3 $var2
+				" >> combine.in
+				grep -wns Improper Coeffs $4 -A $(($ni+1)) | awk  '{$1=$2="";print $0}' > out
+				grep -wns Improper Coeffs $2 -A $(($ni2+1)) | awk '{$1="";print $0}' > out2
+				start=-1
+				i=$start
+				while [[ $i -le $ni ]]
+				do
+					echo "$var3" >> out3
+					((i = i + 1))
+				done
+				paste out3 out > out4
+				mv out4 out
+				rm out3
+				start=-1
+				i=$start
+				while [[ $i -le $ni2 ]]
+				do
+					echo "$var2" >> out3
+					((i = i + 1))
+				done
+				paste out3 out2 > out4
+				mv out4 out2
+				rm out3
+			fi
+		fi
+		sed -i '1,2d' out
+		sed -i '1,2d' out2
+		cat out out2 > out3
+	elif [ -n "$var00" ]; then
+		var3=$(grep -wns improper_style $3 | awk  '{print $2}')
+		echo "
+improper_style     $var3
+		" >> combine.in
+		grep -wns Improper Coeffs $4 -A $(($ni+1)) | awk  '{$1=$2="";print $0}' > out
+		sed -i '1,2d' out
+		mv out out3
+	elif [ -n "$var01" ]; then
+		var2=$(grep -wns Improper $2 | awk  '{print $4}')
+		echo "
+improper_style     $var2
+		" >> combine.in
+		grep -wns Improper Coeffs $2 -A $(($ni2+1)) | awk  '{$1="";print $0}' > out
+		sed -i '1,2d' out
+		mv out out3
+	fi
+	if [ -z "$var00" ] && [ -z "$var01" ]; then
+	echo ""
+	else
+	start=1
+	i=$start
+	while [[ $i -le $ni3 ]]
+	do
+	echo "improper_coeff $i" >> outn
+	    ((i = i + 1))
+	done
+	paste  outn out3 >> combine.in 
+	rm out*
+	fi 
+	
+	echo "
+# Settings
+kspace_style    pppm 0.000001
+dielectric      1.0
+pair_modify     tail yes mix arithmetic
+special_bonds   lj/coul 0.0 0.0 0.5
+neighbor         2.0 bin
+neigh_modify     delay 0 every 1 check yes
+timestep         1.0
+run_style        verlet
+
+# Output
+thermo_style     custom step vol temp press etotal pe ke evdwl ecoul ebond eangle edihed eimp
+thermo           10000
+
+group ico2 type $pcC $pcO
+group co2 type $pcC2 $pcO2
+group g16 type $pcC
+" >> combine.in
+	sim1=$((sim + partition))
+    	if [ $sim -eq 0 ]; then
+    		echo "
+reset_timestep          0
+velocity all create 300 231343
+#delete_atoms random fraction 0.5 no g16 NULL 284201 mol yes compress yes
+fix shake all shake 0.0001 100 0 b ${bnum} ${bnum1}
+dump 1 all dcd 10000 msd${simi1}.dcd
+dump_modify 1 sort id unwrap yes
+fix 1 all nvt temp 300 300 100
+fix mom all momentum 100 linear 1 1 1
+run $run
+write_restart restart_$sim1
+write_data data$sim1.lmps
+" >> combine.in
+    	else
+echo "
+fix shake all shake 0.0001 100 0 b ${bnum} ${bnum1}
+dump 1 all dcd 10000 msd${sim1}.dcd
+dump_modify 1 sort id unwrap yes
+fix 1 all nvt temp 300 300 100
+fix mom all momentum 100 linear 1 1 1
+run $run
+write_restart restart_$sim1
+write_data data$sim1.lmps
+" >> combine.in
+    	fi
+mv combine.in co2msd$sim.in
+done
+
+
+machine=$7
+job=$8
+echo "$machine"
+if [ "$machine" = adastra ]; then
+echo "#!/bin/bash" > srun
+for (( sim=0; sim<sim_run; sim+=partition )); do
+echo "#!/bin/bash
+#=================================================#
+# Job submission script for Lammps_2020@adastra   #
+# Dong_Fan@ICGM_Email:dong.fan@umontpellier.fr    #
+#   Please ONLY use 1 node anytime @adastra       #
+#   unless you know what you are doing {D.F}      #
+#=================================================#
+#SBATCH --account=cmc2017
+#SBATCH --constraint=GENOA
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=48
+#SBATCH --cpus-per-task=1
+#SBATCH --threads-per-core=1
+#SBATCH --output=%A.out
+#SBATCH --time=24:00:00
+#SBATCH --job-name='$sim-$job'
+
+module purge
+module load CCE-CPU-3.0.0
+module load lammps/20230802-mpi-omp-plumed-python3
+
+srun lmp -in co2msd${sim}.in  > log${sim}.com 
+" > run_$sim
+if [ $sim -eq 0 ]; then
+echo '
+job_id'${sim}'=$(sbatch 'run_$sim' | awk '\''{print $4}'\'')
+' >> srun
+else 
+sim1=$((sim - partition))
+echo '
+job_id'${sim}'=$(sbatch --dependency=$job_id'$sim1' 'run_$sim' | awk '\''{print $4}'\'')
+' >> srun
+fi
+done
+fi
+
+
+#if [ $machine = chesden ]; then
+if [ "$machine" = "chesdens" ]; then
+echo "#!/bin/bash" > srun
+echo "running $machine"
+for (( sim=0; sim<sim_run; sim+=partition )); do
+echo '#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --partition=fun,damp
+#SBATCH --output=slurm.log
+#SBATCH --error=slurm.err
+#SBATCH --time=10000:00:00
+#SBATCH --job-name='$sim-$job'
+
+echo "The used cpu number is $SLURM_NTASKS"
+echo "The used node name is $SLURM_JOB_NODELIST"
+echo "The job ID is $SLURM_JOB_ID"
+echo "The job started at $(date)"
+echo "Working directory: $SLURM_SUBMIT_DIR"
+
+# Load necessary modules, if needed
+# module load module_name
+
+cd $SLURM_SUBMIT_DIR
+
+ulimit -s unlimited
+ulimit -m unlimited
+export OMP_NUM_THREADS=1
+
+lammps_2018="/home/adiaz/programs/lammps-2Aug2023/src"
+#mpi="/home/adiaz/anaconda3/bin"
+
+# Run LAMMPS
+mpirun -n $SLURM_NTASKS $lammps_2018/lmp_mpi -in co2msd'${sim}'.in > log'${sim}'.com' > run_$sim
+
+if [ $sim -eq 0 ]; then
+echo '
+job_id'${sim}'=$(sbatch 'run_$sim' | awk '\''{print $4}'\'')
+' >> srun
+else 
+sim1=$((sim - partition))
+echo '
+job_id'${sim}'=$(sbatch --dependency=$job_id'$sim1' 'run_$sim' | awk '\''{print $4}'\'')
+' >> srun
+fi
+done
+fi
+
+chmod +x srun

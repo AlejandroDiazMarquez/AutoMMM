@@ -1,0 +1,25 @@
+#!/bin/bash
+#=================================================#
+# Job submission script for Lammps_2020@adastra   #
+# Dong_Fan@ICGM_Email:dong.fan@umontpellier.fr    #
+#   Please ONLY use 1 node anytime @adastra       #
+#   unless you know what you are doing {D.F}      #
+#=================================================#
+#SBATCH --account=cmc2017
+#SBATCH --constraint=GENOA
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=48
+#SBATCH --cpus-per-task=1
+#SBATCH --threads-per-core=1
+#SBATCH --output=%A.out
+#SBATCH --time=24:00:00
+#SBATCH --job-name=runmod
+
+module purge
+module load develop CCE-CPU-2.1.0
+module load lammps/20230802-mpi-omp-plumed-python3
+#
+# make yes-USER-MISC yes-USER-YAFF yes-RIGID yes-MOLECULE yes-CLASS2 yes-KSPACE
+
+#>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+srun lmp -in MSD.in  > log.com 2>&1

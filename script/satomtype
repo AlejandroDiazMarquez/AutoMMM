@@ -1,0 +1,25 @@
+#!/bin/bash
+echo "
+package require topotools
+package require pbctools
+topo readlammpsdata $1
+pbc wrap -all "> at.in
+
+counter=0
+while read p; do
+((counter++))
+echo '
+set sel [atomselect top "type '$counter'"]
+$sel set name '$p' 
+$sel set type '$p'' >> at.in
+done <$2 
+
+
+echo '
+set sel [atomselect top all]
+$sel writepdb  str.pdb
+$sel writemol2  str.mol2
+exit '>> at.in
+vmd -dispdev text -e at.in
+cp str.pdb first-$1.pdb
+mv str.mol2 first-$1.mol2

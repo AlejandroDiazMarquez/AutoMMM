@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# Generate list.txt
+nt=$(awk '/atom types/ {print '\$1'}' data.*)
+grep -wns Masses data.* -A $(($nt+1)) | awk '{print $5}' > list.txt
+sed -i '1,2d' list.txt
+
+./satomtype data.* list.txt
+./sbonds data.*
+
+nb=$(awk '/bond types/ {print '\$1'}' data.*)
+grep -wns Bond Coeffs data.* -A $(($nb+1)) | awk '{print $0}' > bonds.txt
+sed -i '1,2d' bonds.txt
+awk '{print " ",$2,$3}' bonds.txt > out
+awk '{print $5,$6,$7}' bonds.txt > out2
+paste out analysis/out out2 > out3
+line=$(grep -n 'Bond Coeffs' data.* | cut -f1 -d:)
+line1=$(($line + 1))
+line2=$(($line + $nb + 2))
+sed -n "1,"$line1"p" data.* > out4
+sed -n ''$line2',$p' data.* > out5
+cp data.* old.data
+cat out4 out3 out5 > data.*
+rm out* bonds.txt
+rm -r analysis 
+
+#cp final* final.lmps
+cp in.* min.in
+echo "
+
+# Settings
+dielectric      1.0
+neighbor         2.0 bin
+neigh_modify     delay 0 every 1 check yes
+timestep         1.0
+run_style        verlet
+
+# Output
+thermo_style     custom step vol temp press etotal pe ke evdwl ecoul ebond eangle edihed eimp
+thermo           1
+dump 1 all dcd 100 min.dcd
+dump_modify 1 sort id
+
+# Minimization Step
+min_style        sd
+minimize         1.0e-3 1.0e-3 1000 100000
+min_style        cg
+min_modify       line quadratic
+minimize         1.0e-4 1.0e-4 1000 100000 
+
+variable A2 equal (xhi-xlo)*(yhi-ylo)
+variable vol equal (xhi-xlo)*(yhi-ylo)*(xhi-zlo)
+fix 1 all nvt temp 300 300 100  
+fix 2 all ave/time 10 1000 20000 v_vol v_A2 file volume.out
+run 20000 
+
+# Data file output
+write_data       min.lmps ">> min.in
+sed -i '1d' min.in
+sed -i 's"special_bonds   lj/coul 0.0 0.0 1.0"special_bonds   lj/coul 0.0 0.0 0.5"g' min.in

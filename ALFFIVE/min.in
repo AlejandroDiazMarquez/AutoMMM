@@ -1,0 +1,51 @@
+units           real
+atom_style      full
+boundary        p p p
+
+pair_style      lj/cut/coul/long 12.000
+bond_style      harmonic
+angle_style     hybrid fourier cosine/periodic
+dihedral_style  harmonic
+improper_style  fourier
+kspace_style    ewald 0.000001
+
+dielectric      1.0
+pair_modify     tail yes mix arithmetic
+special_bonds   lj/coul 0.0 0.0 0.5
+box tilt        large
+read_data       data.ALFFIVE
+
+#### Atom Groupings ####
+group           fram     id   1:7900
+#### END Atom Groupings ####
+
+
+
+# Settings
+dielectric      1.0
+neighbor         2.0 bin
+neigh_modify     delay 0 every 1 check yes
+timestep         1.0
+run_style        verlet
+
+# Output
+thermo_style     custom step vol temp press etotal pe ke evdwl ecoul ebond eangle edihed eimp
+thermo           1
+dump 1 all dcd 100 min.dcd
+dump_modify 1 sort id
+
+# Minimization Step
+min_style        sd
+minimize         1.0e-3 1.0e-3 1000 100000
+min_style        cg
+min_modify       line quadratic
+minimize         1.0e-4 1.0e-4 1000 100000 
+
+variable A2 equal (xhi-xlo)*(yhi-ylo)
+variable vol equal (xhi-xlo)*(yhi-ylo)*(xhi-zlo)
+fix 1 all npt temp 300 300 100 iso 1 1 100 
+fix 2 all ave/time 10 1000 20000 v_vol v_A2 file volume.out
+run 20000 
+
+# Data file output
+write_data       min.lmps 

@@ -1,0 +1,792 @@
+#!/bin/bash
+# This script will generate the postanalysis data, you need to include your initial mof, polymer and the final interfase
+
+if [ ! -d "Postanalysis/zplot" ]; then
+rm -r Postanalysis
+mkdir Postanalysis
+cd Postanalysis
+cp ../data.* ./mof
+cp ../pack.lmps ./pol
+cp ../final-interface.lmps ./final
+
+nt=$(awk '/atom types/ {print '\$1'}' mof)
+nt2=$(awk '/atom types/ {print '\$1'}' pol)
+grep -wns Masses mof -A $(($nt+1)) | awk '{print $5}' > out
+grep -wns Masses pol -A $(($nt2+1)) | awk '{print $5}' >> out
+sed -i '/^$/d' out
+sed -i 's/+//g' out
+head -n $nt out > listm.txt 
+tail -n $nt2 out > listp.txt 
+
+echo "
+package require topotools
+package require pbctools
+topo readlammpsdata final
+pbc wrap -all "> at.in
+
+counter=0
+while read p; do
+((counter++))
+echo '
+set sel [atomselect top "type '$counter'"]
+$sel set name '$p' 
+$sel set type '$p'' >> at.in
+done <out
+
+echo '
+set sel [atomselect top all]
+$sel writepdb  str.pdb
+exit '>> at.in
+vmd -dispdev text -e at.in
+cp str.pdb first-final.pdb
+
+echo '
+from __future__ import division
+import math
+import numpy as np
+import mdtraj as md
+import matplotlib.pyplot as plt
+import sys
+np.set_printoptions(threshold=sys.maxsize)
+import warnings
+warnings.filterwarnings("ignore")
+
+traj1          = md.load('\''first-final.pdb'\'') ## Trajectory read in nanometer unit ##
+traj1.xyz      = 10*traj1.xyz ## change the unit back to angstrom
+topology      = traj1.topology ## Topology information of the system 
+no_atoms      = traj1.n_atoms ## Total number of atoms
+no_residues   = topology.n_residues ## Total number of residues
+no_frames     = traj1.n_frames ## Total number of frames
+no_frames     = 1
+
+box_size = 10*traj1.unitcell_lengths[0]
+print (box_size)
+if box_size[2]>= 1000:
+    sys.exit("The box size in the z-axis is greater than or equal to 1000. Exiting the script.")
+for frame in range(no_frames):
+    # Get the volume of the unit cell for the current frame
+    vol = traj1.unitcell_volumes[frame] * 1000  # Volume in angstrom^n
+    molecule_atoms = topology.select(f"resSeq {444}")
+    boundary_margin =10.0
+    close_to_boundary = np.any ((traj1.atom_slice(molecule_atoms).xyz[frame,:, 2] < boundary_margin) | (traj1.atom_slice(molecule_atoms).xyz[frame,:, 2] > box_size[2] - boundary_margin))
+    while close_to_boundary:
+            com = md.compute_center_of_mass(traj1[frame].atom_slice(molecule_atoms)).flatten()
+            print (frame, com,'\''moving'\'')
+            if com[2] > box_size[2]/2:
+                traj1.xyz[frame] -= np.array([0,0,boundary_margin])
+                traj1.xyz[frame] -= np.floor(traj1.xyz[frame] / box_size) * box_size
+
+            else:
+                traj1.xyz[frame] += np.array([0,0,boundary_margin])
+                traj1.xyz[frame] -= np.floor(traj1.xyz[frame] / box_size) * box_size
+
+            close_to_boundary = np.any ((traj1.atom_slice(molecule_atoms).xyz[frame,:, 2] < boundary_margin) | (traj1.atom_slice(molecule_atoms).xyz[frame,:, 2] > box_size[2] - boundary_margin))
+    com = md.compute_center_of_mass(traj1[frame].atom_slice(molecule_atoms)).flatten()
+    translation = np.array([0, 0, (box_size[2] / 2 - com[2])])
+    traj1.xyz[frame] += translation
+    traj1.xyz[frame] -= np.floor(traj1.xyz[frame] / box_size) * box_size
+
+# Store the modified trajectory to new files
+modified_pdb_filename = '\''modified.pdb'\''
+
+traj1.xyz      = traj1.xyz/10 ## change the unit back to angstrom
+# Save the modified trajectory to the new PDB file
+traj1[0].save(modified_pdb_filename)'> moving.py
+python moving.py
+mv modified.pdb first-final.pdb
+sed -i '1d' first-final.pdb
+
+# Generate z density graph
+boxx=$(awk 'NR==1{print '\$2'}' first-final.pdb)
+boxy=$(awk 'NR==1{print '\$3'}' first-final.pdb)
+boxz=$(awk 'NR==1{print '\$4'}' first-final.pdb)
+
+echo '
+package require topotools
+package require pbctools
+mol new first-final.pdb
+mol addfile ../DIM.dcd waitfor all
+pbc wrap -all
+animate write dcd wrapped.dcd beg 0 end -1 waitfor all
+exit'> vmdwrapping
+vmd -dispdev text -e vmdwrapping
+
+mat=$(awk '/atoms/ {print '\$1'}' mof)
+#rm -r rdf poredist zplot 
+
+# Generate RDF
+rm -r rdf
+mkdir rdf 
+cd rdf
+
+echo -e '
+#!/usr/bin/env python
+# coding: utf-8
+
+print ("package require topotools\\n")
+print ("package require pbctools\\n")
+print ("mol new ../first-final.pdb\\n")
+print ("mol addfile ../wrapped.dcd  waitfor all\\n")
+
+f =open("../listm.txt","r")
+a = f.read().split()
+g =open("../listp.txt","r")
+b = g.read().split()
+
+for i  in range (len(a)):
+    print ('\''set %s [atomselect top "name %s"]\\n'\''%(a[i],a[i]))
+print ('\''\\n\\n\\n\\n\\n'\'')
+for i  in range (len(b)):
+    print ('\''set %s [atomselect top "(within 20 of (index 0 to '$mat')) and name %s"]\\n'\''%(b[i],b[i]))
+
+print ("\\n\\n\\n\\n\\n")
+
+for i in range (len(a)):
+    for j in range (len(b)):
+        ofile = a[i]+"-"+b[j]+".dat"
+        print ('\''set gr [measure gofr $%s $%s delta .1 rmax 10 usepbc 1 selupdate 1 first 1 last -1 step 1]\\n\\n\\n\\n'\''%(a[i],b[j]))
+        print ('\''set outfile [open %s w]\\n'\''%(ofile))
+        print ("set r [lindex $gr 0]\\nset gr2 [lindex $gr 1]\\nset igr [lindex $gr 2]\\n")
+        print ('\''set i 0\\nforeach j $r k $gr2 l $igr {\\n   puts $outfile "$j $k $l"\\n}\\nclose $outfile\\n'\'')
+
+print ('\''quit'\'')' >generate_rdf_input.py
+
+python generate_rdf_input.py > vmd_input.in
+
+
+echo '
+from __future__ import division
+import math
+import matplotlib.pyplot as plt
+import sys
+import sympy as sp
+import numpy as np
+import cmath
+import mdtraj as md
+import os
+import matplotlib.cm as cm
+
+plt.rcParams.update({'\''figure.max_open_warning'\'': 0})
+
+
+arr = os.listdir()
+files=[]
+for file in os.listdir():
+    if file.endswith(".dat"):
+        files.append(file)
+for i in range (len(files)):
+    a,b = files[i].split('\''-'\'', 1)
+    c,d = b.split('\''.'\'', 1)
+    x= np.loadtxt(files[i])
+    label_size = 15
+    fig1, ax1 = plt.subplots(nrows=1, ncols=1)
+    plt.xlabel("r (Å)",ha='\''center'\'', fontsize=20)
+    plt.ylabel("g(r)",ha='\''center'\'', fontsize=20)
+    plt.rcParams['\''xtick.labelsize'\''] = label_size
+    plt.rcParams['\''ytick.labelsize'\''] = label_size
+    plt.rcParams['\''xtick.major.size'\''] = 5
+    plt.rcParams['\''xtick.major.width'\''] = 1.5
+    plt.rcParams['\''ytick.major.size'\''] = 5
+    plt.rcParams['\''ytick.major.width'\''] = 1.5
+    plt.rcParams['\''axes.linewidth'\''] = 2
+    plt.rcParams['\''lines.linewidth'\''] = 5
+    plt.rcParams['\''errorbar.capsize'\'']=15
+    plt.rcParams['\''legend.frameon'\''] = False
+    plt.xlim(0,10)
+    label1=a+"-"+c
+    fig_name=a+"-"+c+".jpg"
+    plt.plot(x[:,0],x[:,1],color="red",linewidth=4,linestyle='\''solid'\'',label=label1)
+    ax1.legend()
+    ax1.legend(fontsize=15)
+    fig1.savefig(fig_name, dpi=600, bbox_inches = '\''tight'\'', pad_inches = 0.02)' >plot_rdf.py
+vmd -dispdev text -e vmd_input.in
+python plot_rdf.py
+cd ..
+
+
+# Generate zdensity
+rm -r zplot
+mkdir zplot
+cd zplot
+
+echo '
+package require topotools
+package require pbctools
+mol new ../first-final.pdb
+set mof [atomselect top "index 0 to '$mat'"]
+measure center $mof
+exit' > masscenter
+
+vmd -dispdev text -e masscenter > mc
+grep -wns atomselect0 mc -A $((+1)) | awk '{print $3}' > mascenter
+mc=$(awk 'NR==2{print '\$1'}' mascenter)
+echo $mc
+rm mc mascenter
+
+
+echo '
+from __future__ import division
+import math
+import numpy as np
+import mdtraj as md
+import matplotlib.pyplot as plt
+import sys
+np.set_printoptions(threshold=sys.maxsize)
+import warnings
+warnings.filterwarnings("ignore")
+
+
+
+traj1          = md.load('\''../wrapped.dcd'\'',top='\''../first-final.pdb'\'') ## Trajectory read in nanometer unit ##
+traj1.xyz      = 10*traj1.xyz ## change the unit back to angstrom
+
+topology      = traj1.topology ## Topology information of the system 
+no_atoms      = traj1.n_atoms ## Total number of atoms
+no_residues   = topology.n_residues ## Total number of residues
+no_frames     = traj1.n_frames ## Total number of frames
+#no_frames     = 5 
+vol           = traj1.unitcell_volumes[0]*1000 ## volume in angstrom^n_width = 0.5
+
+bin_width = 0.5
+cutoff    =800 #453
+t_n_a     =1600 #906
+g_rdf_wat1 = np.zeros((no_frames,t_n_a))
+g_rdf_wat2 = np.zeros((no_frames,t_n_a))
+g_rdf_wat3 = np.zeros((no_frames,t_n_a))
+g_rdf_wat4 = np.zeros((no_frames,t_n_a))
+g_rdf_wat5 = np.zeros((no_frames,t_n_a))
+g_rdf_wat6 = np.zeros((no_frames,t_n_a))
+
+volume = bin_width*'$boxx'*'$boxy'
+wat1    = topology.select("index 0 to '$mat'")
+wat2    = topology.select("not (index 0 to '$mat') and not name H8 H9 H10")
+
+box_size = 10*traj1.unitcell_lengths[0]
+print (box_size)
+if box_size[2]>= 1000:
+    sys.exit("The box size in the z-axis is greater than or equal to 1000. Exiting the script.")
+for frame in range(no_frames):
+    # Get the volume of the unit cell for the current frame
+    vol = traj1.unitcell_volumes[frame] * 1000  # Volume in angstrom^n
+    molecule_atoms = topology.select(f"resSeq {444}")
+    boundary_margin =10.0
+    close_to_boundary = np.any ((traj1.atom_slice(molecule_atoms).xyz[frame,:, 2] < boundary_margin) | (traj1.atom_slice(molecule_atoms).xyz[frame,:, 2] > box_size[2] - boundary_margin))
+    while close_to_boundary:
+            com = md.compute_center_of_mass(traj1[frame].atom_slice(molecule_atoms)).flatten()
+            print (frame, com,'\''moving'\'')
+            if com[2] > box_size[2]/2:
+                traj1.xyz[frame] -= np.array([0,0,boundary_margin])
+                traj1.xyz[frame] -= np.floor(traj1.xyz[frame] / box_size) * box_size
+
+            else:
+                traj1.xyz[frame] += np.array([0,0,boundary_margin])
+                traj1.xyz[frame] -= np.floor(traj1.xyz[frame] / box_size) * box_size
+
+            close_to_boundary = np.any ((traj1.atom_slice(molecule_atoms).xyz[frame,:, 2] < boundary_margin) | (traj1.atom_slice(molecule_atoms).xyz[frame,:, 2] > box_size[2] - boundary_margin))
+    com = md.compute_center_of_mass(traj1[frame].atom_slice(molecule_atoms)).flatten()
+    translation = np.array([0, 0, (box_size[2] / 2 - com[2])])
+    traj1.xyz[frame] += translation
+    traj1.xyz[frame] -= np.floor(traj1.xyz[frame] / box_size) * box_size
+
+for k in range (no_frames):
+    percentage = int(100.0*k/no_frames)
+    print ("Completed",percentage,"%", end = "\r")
+    f_no   = k
+    count1 = 0
+    count2 = 0
+    for i4 in range (len(wat1)):
+            distt1 = traj1.xyz[f_no,wat1[i4],2]-np.average(traj1.xyz[f_no,wat1[:],2])+'$boxz'
+            j1     = int(distt1/bin_width)
+            g_rdf_wat1[f_no][j1] = g_rdf_wat1[f_no][j1] + 1
+            count1               = count1 + 1
+
+    for i5 in range (len(wat2)):
+            distt4 = traj1.xyz[f_no,wat2[i5],2]-np.average(traj1.xyz[f_no,wat1[:],2])+'$boxz'
+            j4     = int(distt4/bin_width)
+            g_rdf_wat4[f_no][j4] = g_rdf_wat4[f_no][j4] + 1
+            count2               = count2 + 1
+
+
+print (distt1)
+p1 = (sum(g_rdf_wat1[:][:])/((no_frames)*volume))
+p4 = (sum(g_rdf_wat4[:][:])/((no_frames)*volume))
+
+f_new1=open('\''mof.dat'\'', '\''w+'\'')
+f_new2=open('\''polymer.dat'\'', '\''w+'\'')
+a=md.compute_center_of_mass(traj1)
+b=np.average(a[:,2])
+mof_av = np.empty(t_n_a)
+mof_st = np.empty(t_n_a)
+pol_av = np.empty(t_n_a)
+pol_st = np.empty(t_n_a)
+
+for j in range (t_n_a):
+    mof_av[j] = p1[j]
+    pol_av[j] = p4[j]
+
+zmof = np.zeros((t_n_a,2))
+zpol = np.zeros((t_n_a,2))
+for j in range (t_n_a):
+	f_new1.write("%f\t%f\t%f \n" % (j*bin_width,mof_av[j],mof_st[j]))
+	f_new2.write("%f\t%f\t%f \n" % (j*bin_width,pol_av[j],pol_st[j]))
+	zmof[j,0]=j*bin_width
+	zmof[j,1]=mof_av[j]
+	zpol[j,0]=j*bin_width
+	zpol[j,1]=pol_av[j]
+f_new1.close()
+f_new2.close()
+
+boxz =int('$boxz')
+for j in range (t_n_a):
+        if boxz==int(zmof[j,0]):
+                middle=j
+noise = 0.01
+noise2 = 0.08
+num=0
+mid =0
+while num < noise2 :
+        mid +=1
+        num = zmof[mid,1]
+lmof=zmof[mid-1,0]
+nlmof =mid-1
+num=0
+mid =int(len(zmof)-1)
+while num < noise2:
+        mid -=1
+        num = zmof[mid,1]
+hmof=zmof[mid+1,0]
+nhmof = mid+1
+num=0
+mid =middle
+while num < noise :
+        mid -=1
+        num = zpol[mid,1]
+lpol=zpol[mid,0]
+nlpol = mid
+num=0
+mid =middle
+while num < noise :
+        mid +=1
+        num = zpol[mid,1]
+hpol=zpol[mid,0]
+nhpol = mid
+
+print (lpol,hpol,lmof,hmof)
+# Function to find the first maxima given a starting index and direction
+def find_maxima(data, mid, direction):
+    num = 0
+    num1 = 1
+    while num1 >= num:
+        mid += direction
+        num = data[mid, 1]
+        num1 = data[mid+direction,1]
+    return data[mid, 0]
+
+# Find the first maxima to the right starting from 'lpol'
+mid='$boxz'
+print (mid)
+first_maxima_right_pol = find_maxima(zpol, int(nhpol), direction=1)-mid/2
+first_maxima_left_pol = find_maxima(zpol, int(nlpol), direction=-1)-mid/2
+first_maxima_left_mof = find_maxima(zmof, int(nlmof), direction=1)+2-mid/2
+first_maxima_right_mof = find_maxima(zmof, int(nhmof), direction=-1)-2-mid/2
+inl=abs(first_maxima_left_pol-first_maxima_left_mof)
+inh=abs(first_maxima_right_pol-first_maxima_right_mof)
+ina=(inl+inh)/2
+print (middle, '$boxz', first_maxima_right_pol, first_maxima_left_pol, first_maxima_right_mof, first_maxima_left_mof)
+
+f_lim=open('\''limits.dat'\'', '\''w+'\'')
+if first_maxima_left_mof < first_maxima_left_pol:
+        f_lim.write("%f\n%f\n%f\n%f\n%f\n%f\n%f\n%f" % (middle,first_maxima_left_mof,first_maxima_left_pol,first_maxima_right_pol,first_maxima_right_mof,inl,inh,ina))
+else:
+        f_lim.write("%f\n%f\n%f\n%f\n%f\n%f\n%f\n%f" % (middle,first_maxima_left_pol,first_maxima_left_mof,first_maxima_right_mof,first_maxima_right_pol,inl,inh,ina))
+
+a1 = np.loadtxt ("mof.dat")
+a2 = np.loadtxt ("polymer.dat")
+label_size = 15
+xmin=-55
+xmax=55
+fig1, ax1 = plt.subplots(nrows=1, ncols=1)
+plt.xlabel("z coordinate (Å)",ha='\''center'\'', fontsize=20)
+plt.ylabel("Atomic Density (N$_{atoms}$/Å$^{3}$)",ha='\''center'\'', fontsize=20)
+plt.rcParams['\''xtick.labelsize'\''] = label_size
+plt.rcParams['\''ytick.labelsize'\''] = label_size
+plt.rcParams['\''xtick.major.size'\''] = 5
+plt.rcParams['\''xtick.major.width'\''] = 1.5
+plt.rcParams['\''ytick.major.size'\''] = 5
+plt.rcParams['\''ytick.major.width'\''] = 1.5
+plt.rcParams['\''axes.linewidth'\''] = 2
+plt.rcParams['\''lines.linewidth'\''] = 5
+plt.rcParams['\''errorbar.capsize'\'']=15
+plt.rcParams['\''legend.frameon'\''] = False
+plt.xlim(xmin,xmax)
+#plt.ylim(-0.00, 0.08)
+ax1.yaxis.set_major_locator(plt.MaxNLocator(4))
+ax1.xaxis.set_major_locator(plt.MaxNLocator(5))
+ax1.grid(False)
+fig1.set_size_inches(18, 5)
+
+R1=first_maxima_left_mof-mid/2
+R2=first_maxima_left_pol-mid/2
+R3=first_maxima_right_pol-mid/2
+R4=first_maxima_right_mof-mid/2
+
+ax1.axvspan(R2, R1, alpha=0.2, color='\''violet'\'')
+ax1.axvspan(R4, R3, alpha=0.2, color='\''violet'\'')
+ax1.axvspan(R3, xmax, alpha=0.15, color='\''cyan'\'')
+ax1.axvspan(xmin, R2, alpha=0.15, color='\''cyan'\'')
+
+
+ax1.plot(a1[:,0]-mid, a1[:,1], color="black",linewidth=1,label="MOF")
+ax1.plot(a2[:,0]-mid, a2[:,1], color="red",linewidth=1,label="POL")
+ax1.fill_between(a1[:,0]-mid, a1[:,1]-a1[:,2], a1[:,1]+ a1[:,2],color='\''gray'\'', alpha=0.2)
+ax1.fill_between(a2[:,0]-mid, a2[:,1]-a2[:,2], a2[:,1]+ a2[:,2],color='\''red'\'', alpha=0.2)
+
+ax1.legend()
+ax1.legend(fontsize=19)
+plt.savefig('\''my_plot.jpg'\'')
+#plt.show() '> zdensity.py
+
+python zdensity.py
+cd ..
+
+# Generate poredensity 
+rm -r poredist
+mkdir poredist
+cd poredist
+cp ../../scripts/mass ./
+cp ../../scripts/radius ./
+cp ../listm.txt ./
+cp ../listp.txt ./
+
+echo ' 
+from __future__ import division
+import math
+import numpy as np
+import mdtraj as md
+import matplotlib.pyplot as plt
+from itertools import groupby
+from string import digits
+import warnings
+warnings.filterwarnings("ignore")
+import sys
+
+mass = np.loadtxt("mass",dtype='\''str'\'',delimiter=" ")
+rad = np.loadtxt("radius",dtype='\''str'\'',delimiter=" ")
+lm = np.loadtxt ("listm.txt",dtype='\''str'\'')
+lp = np.loadtxt ("listp.txt",dtype='\''str'\'')
+f_new1=open('\''mass.mass'\'', '\''w+'\'')
+f_new2=open('\''rad.rad'\'', '\''w+'\'')
+for i in range (len(lm)):
+	val=lm[i]
+	rm_digits=str.maketrans('\'''\'','\'''\'',digits)
+	val=val.translate(rm_digits)
+	val=val[0:2]
+	val=val.replace("_",'\'''\'')
+	for j in range (len(mass)):
+		if val == mass[j,1]: 	
+			f_new1.write("%s\t%s\n" % (lm[i],mass[j,3]))
+			num=float(rad[j,3])/100
+			f_new2.write("%s\t%f\n" % (lm[i],num))
+for i in range (len(lp)):
+	val=lp[i]
+	rm_digits=str.maketrans('\'''\'','\'''\'',digits)
+	val =val.translate(rm_digits)
+	val=val[0:1]
+	val=val.replace("_",'\'''\'')
+	val=val.capitalize()
+	for j in range (len(mass)):
+		if val == mass[j,1]: 	
+			f_new1.write("%s\t%s\n" % (lp[i],mass[j,3]))
+			num=float(rad[j,3])/100
+			f_new2.write("%s\t%f\n" % (lp[i],num))' > massrad.py
+
+python massrad.py
+#rm mass radius
+cp ../first-final.pdb ./
+cp ../zplot/limits.dat ./
+low=$(awk 'NR==4{print '\$1'}' limits.dat)
+hig=$(awk 'NR==5{print '\$1'}' limits.dat)
+echo $low, $hig
+
+echo '
+from __future__ import division
+import math
+import numpy as np
+import mdtraj as md
+import matplotlib.pyplot as plt
+from itertools import groupby
+import warnings
+warnings.filterwarnings("ignore")
+import sys
+
+traj          = md.load(sys.argv[3],top=sys.argv[3]) ## Trajectory read in nanometer unit ##
+traj.xyz      = 10*traj.xyz ## change the unit back to angstrom
+topology      = traj.topology ## Topology information of the system 
+no_atoms      = traj.n_atoms ## Total number of atoms
+no_residues   = topology.n_residues ## Total number of residues
+no_frames     = traj.n_frames ## Total number of frames
+vol           = traj.unitcell_volumes[0]*1000 ## volume in angstrom^3
+boxx          = 10*traj.unitcell_lengths[0][0]
+boxy          = 10*traj.unitcell_lengths[0][1]
+#boxz          = 10*traj.unitcell_lengths[0][2]
+lowz          = float(sys.argv[1])
+highz         = float(sys.argv[2])
+boxz          = highz - lowz
+anglex        = traj.unitcell_angles[0][0]
+angley        = traj.unitcell_angles[0][1]
+anglez        = traj.unitcell_angles[0][2]
+
+out = sys.argv[3] + "-" + sys.argv[1] + "-" + sys.argv[2] + ".cif"
+fcif          = open (out,"w+")
+fcif.write("\n")
+fcif.write("#======================================================================\n")
+fcif.write("# CRYSTAL DATA\n")
+fcif.write("#----------------------------------------------------------------------\n")
+fcif.write("pdb.pdb\n\n")
+fcif.write("_chemical_name_common                  '\''PDB File'\''\n")
+fcif.write("_cell_length_a%34.6f\n"%(boxx))
+fcif.write("_cell_length_b%34.6f\n"%(boxy))
+fcif.write("_cell_length_c%34.6f\n"%(boxz))
+fcif.write("_cell_angle_alpha%31.6f\n"%(anglex))
+fcif.write("_cell_angle_beta%32.6f\n"%(angley))
+fcif.write("_cell_angle_gamma%31.6f\n"%(anglez))
+fcif.write("_cell_volume%39.6f\n"%(vol))
+fcif.write("_space_group_name_H-M_alt              '\''P 1'\''\n")
+fcif.write("_space_group_IT_number                 1\n")
+fcif.write("\nloop_\n_space_group_symop_operation_xyz\n   '\''x, y, z'\''\n\n")
+fcif.write("loop_\n   _atom_site_label\n   _atom_site_occupancy\n   _atom_site_fract_x\n   _atom_site_fract_y\n   _atom_site_fract_z\n   _atom_site_adp_type\n   _atom_site_U_iso_or_equiv\n   _atom_site_type_symbol\n")
+for i in range (no_atoms):
+    name = topology.atom(i).name
+    occ  = 1
+    if traj.xyz[0,i,2] > lowz and traj.xyz[0,i,2] < highz :
+        x    = traj.xyz[0,i,0]/boxx
+        y    = traj.xyz[0,i,1]/boxy
+        z    = (traj.xyz[0,i,2]-lowz)/boxz
+        fcif.write("   %-4s%11.1f%13.6f%13.6f%13.6f    Uiso%10.6f %s\n"%(name,occ,x,y,z,occ,name))
+fcif.close()' > pdb2cif.py
+
+python pdb2cif.py $low $hig first-final.pdb
+var=('network -ha -r rad.rad -mass mass.mass -psd 0.5 0.5 5000 first-final.pdb-'$low'-'$hig'.cif')
+${var[@]}
+sed -i '1,11d' first-final.pdb-$low-$hig.psd_histo
+
+ppol=$(echo $low -$hig + $low |bc)
+python pdb2cif.py $ppol $low first-final.pdb
+var=('network -ha -r rad.rad -mass mass.mass -psd 0.5 0.5 5000 first-final.pdb-'$ppol'-'$low'.cif')
+${var[@]}
+sed -i '1,11d' first-final.pdb-$ppol-$low.psd_histo
+
+pmof=$(echo $hig +$hig -$low |bc)
+python pdb2cif.py $hig $pmof first-final.pdb
+var=('network -ha -r rad.rad -mass mass.mass -psd 0.5 0.5 5000 first-final.pdb-'$hig'-'$pmof'.cif')
+${var[@]}
+sed -i '1,11d' first-final.pdb-$hig-$pmof.psd_histo
+
+echo '
+from __future__ import division
+import math
+import numpy as np
+import mdtraj as md
+import matplotlib.pyplot as plt
+from itertools import groupby
+import warnings
+warnings.filterwarnings("ignore")
+import sys
+
+a1 = np.loadtxt ("first-final.pdb-'$low'-'$hig'.psd_histo")
+a2 = np.loadtxt ("first-final.pdb-'$ppol'-'$low'.psd_histo")
+a3 = np.loadtxt ("first-final.pdb-'$hig'-'$pmof'.psd_histo")
+label_size = 15
+fig1, ax1 = plt.subplots(nrows=1, ncols=1)
+plt.xlabel("d (Å)",ha='\''center'\'', fontsize=20)
+plt.ylabel("PSD (a.u.)",ha='\''center'\'', fontsize=20)
+plt.rcParams['\''xtick.labelsize'\''] = label_size
+plt.rcParams['\''ytick.labelsize'\''] = label_size
+plt.rcParams['\''xtick.major.size'\''] = 5
+plt.rcParams['\''xtick.major.width'\''] = 1.5
+plt.rcParams['\''ytick.major.size'\''] = 5
+plt.rcParams['\''ytick.major.width'\''] = 1.5
+plt.rcParams['\''axes.linewidth'\''] = 2
+plt.rcParams['\''lines.linewidth'\''] = 5
+plt.rcParams['\''errorbar.capsize'\'']=15
+plt.rcParams['\''legend.frameon'\''] = False
+plt.xlim(0,20)
+plt.ylim(bottom=0.0)
+ax1.yaxis.set_major_locator(plt.MaxNLocator(4))
+ax1.xaxis.set_major_locator(plt.MaxNLocator(5))
+ax1.grid(False)
+fig1.set_size_inches(18, 5)
+
+ax1.plot(a1[:,0], a1[:,3], color="black",linewidth=1,label="interphase")
+ax1.plot(a2[:,0], a2[:,3], color="blue",linewidth=1,label="pureMOF")
+ax1.plot(a3[:,0], a3[:,3], color="red",linewidth=1,label="purepol")
+#ax1.plot(a1[:,0], a1[:,3]-0.5*a2[:,3]-0.5*a3[:,3], color="black",linewidth=1,linestyle="dashed",label="mix-1/2*(MOF+pol)")
+#ax1.fill_between(a1[:,0], a1[:,3]-0.5*a2[:,3]-0.5*a3[:,3], 0,color="gray", alpha=0.2)
+
+ax1.legend()
+ax1.legend(fontsize=19)
+plt.savefig('\''my_plot.jpg'\'')
+#plt.show() '> pore.py
+
+python pore.py 
+cd ..
+
+# ALL PLOTS
+#rm -r sumary 
+#mkdir sumary
+#cd sumary
+#cp ../rdf/*.dat ./
+#cp ../poredist/*psd_histo ./
+#cp ../zplot/*.dat ./
+#cp ../first-final.pdb ./
+#mv mof.dat mof
+#mv polymer.dat polymer
+#mv limits.dat limits
+#low=$(awk 'NR==4{print '\$1'}' limits)
+#hig=$(awk 'NR==5{print '\$1'}' limits)
+#low2=$(awk 'NR==2{print '\$1'}' limits)
+#hig2=$(awk 'NR==3{print '\$1'}' limits)
+#ppol=$(echo $low -$hig + $low |bc)
+#pmof=$(echo $hig +$hig -$low |bc)
+#boxz=$(awk 'NR==1{print '\$4'}' first-final.pdb)
+#mat=$(awk '/atoms/ {print '\$1'}' ../mof)
+#mat1=$(echo $mat-1 |bc)
+#
+#echo '
+#package require topotools
+#package require pbctools
+#mol new first-final.pdb
+#color Display {Background} white
+#display projection Orthographic
+#display depthcue A off 
+#axes location off
+#display height 2.1
+#set mof [atomselect top "index 0 to '$mat1'"]
+#measure center $mof
+#mol delrep 0 top
+#mol selection {index 0 to '$mat1' and y>2 and x>2}
+#mol representation cpk 0.9 0.1
+#mol material AOShiny
+#mol addrep top 
+#mol selection {(within 30 of index 0 to '$mat1') and not index 0 to '$mat1' and y>2 and x>2}
+#mol representation licorice
+#mol material Diffuse
+#mol color resID
+#mol addrep top 
+#display resetview
+#rotate y by 90
+#scale by 1.5
+#render Tachyon yzplane "/home/adiaz/anaconda3/envs/main/lib/tachyon_LINUXAMD64" -aasamples 12 %s -res 4096 2048 -format bmp  -o %s.bmp
+#rotate x by 90
+#render Tachyon xzplane "/home/adiaz/anaconda3/envs/main/lib/tachyon_LINUXAMD64" -aasamples 12 %s -res 4096 2048 -format bmp  -o %s.bmp
+#exit'> vmdplots
+#
+##vmd -dispdev text -e vmdplots
+#
+#echo '
+#from __future__ import division
+#import math
+#import numpy as np
+#import mdtraj as md
+#import matplotlib.pyplot as plt
+#from itertools import groupby
+#import sys
+#np.set_printoptions(threshold=sys.maxsize)
+#import warnings
+#warnings.filterwarnings("ignore")
+#import sympy as sp
+#import cmath
+#import mdtraj as md
+#import os
+#import matplotlib.cm as cm
+#import matplotlib.image as mpimg
+#
+#fig= plt.figure(figsize=(8.27,11.67))
+#ax =fig.add_subplot(3,1,1)
+#ax2 =fig.add_subplot(3,2,3)
+#ax3 =fig.add_subplot(3,2,4)
+#ax4 =fig.add_subplot(3,2,5)
+#ax5 =fig.add_subplot(3,2,6)
+##fig.set_size_inches(18, 5)
+#a1 = np.loadtxt ("mof")
+#a2 = np.loadtxt ("polymer")
+#label_size = 15
+#xmin=-55
+#xmax=55
+#
+#mid='$boxz'
+#R1=-mid/2+'$low'
+#R2=-mid/2+'$hig'
+#R3=-mid/2+'$low2'
+#R4=-mid/2+'$hig2'
+#
+#ax.set_xlabel("z coordinate (Å)",ha='\''center'\'', fontsize=10)
+#ax.set_ylabel("Atomic Density (N$_{atoms}$/Å$^{3}$)",ha='\''center'\'', fontsize=10)
+#ax.set_xlim([xmin,xmax])
+#ax.grid(False)
+#ax.axvspan(R2, R1, alpha=0.2, color='\''violet'\'')
+#ax.axvspan(R4, R3, alpha=0.2, color='\''violet'\'')
+#ax.axvspan(R2, xmax, alpha=0.15, color='\''cyan'\'')
+#ax.axvspan(xmin, R3, alpha=0.15, color='\''cyan'\'')
+#ax.plot(a1[:,0]-mid, a1[:,1], color="black",linewidth=1,label="MOF")
+#ax.plot(a2[:,0]-mid, a2[:,1], color="red",linewidth=1,label="POL")
+#ax.fill_between(a1[:,0]-mid, a1[:,1]-a1[:,2], a1[:,1]+ a1[:,2],color='\''gray'\'', alpha=0.2)
+#ax.fill_between(a2[:,0]-mid, a2[:,1]-a2[:,2], a2[:,1]+ a2[:,2],color='\''red'\'', alpha=0.2)
+#ax.legend(fontsize=8)
+#
+#pa1 = np.loadtxt ("first-final.pdb-'$low'-'$hig'.psd_histo")
+#pa2 = np.loadtxt ("first-final.pdb-'$ppol'-'$low'.psd_histo")
+#pa3 = np.loadtxt ("first-final.pdb-'$hig'-'$pmof'.psd_histo")
+#ax2.set_xlabel("z coordinate (Å)",ha='\''center'\'', fontsize=10)
+#ax2.set_ylabel("Intensity",ha='\''center'\'', fontsize=10)
+#ax2.set_xlim(0,20)
+#ax2.set_ylim(bottom=0.0,top=1)
+#ax2.yaxis.set_major_locator(plt.MaxNLocator(4))
+#ax2.xaxis.set_major_locator(plt.MaxNLocator(5))
+#ax2.grid(False)
+#ax2.plot(pa1[:,0], pa1[:,3], color="black",linewidth=1,label="interphase")
+#ax2.plot(pa2[:,0], pa2[:,3], color="blue",linewidth=1,label="pureMOF")
+#ax2.plot(pa3[:,0], pa3[:,3], color="red",linewidth=1,label="purepol")
+##ax2.plot(pa1[:,0], pa1[:,3]-0.5*pa2[:,3]-0.5*pa3[:,3], color="black",linewidth=1,linestyle="dashed",label="mix-1/2*(MOF+pol)")
+##ax2.fill_between(pa1[:,0], pa1[:,3]-0.5*pa2[:,3]-0.5*pa3[:,3], 0,color="gray", alpha=0.2)
+#ax2.legend(fontsize=8)
+#
+#arr = os.listdir()
+#files=[]
+#for file in os.listdir():
+#    if file.endswith(".dat"):
+#        files.append(file)
+#label_size = 15
+#ax3.set_xlabel("r (Å)",ha='\''center'\'', fontsize=10)
+#ax3.set_ylabel("g(r)",ha='\''center'\'', fontsize=10)
+#ax3.set_xlim(0,10)
+#fig_name="final.jpg"
+#for i in range (len(files)):
+#	a,b = files[i].split('\''-'\'', 1)
+#	c,d = b.split('\''.'\'', 1)
+#	x= np.loadtxt(files[i])
+#	for j in range (len(x[:,0])):
+#		if (x[j,0] < 4 and x[j,1] > 0.4) or (x[j,0] < 2 and x[j,1] > 0.05) :
+#			label1=a+"-"+c
+#			ax3.plot(x[:,0],x[:,1],linewidth=1,linestyle='\''solid'\'',label=label1)
+#			ax3.legend(fontsize=8)
+#			break
+##xz=mpimg.imread('\''xzplane.bmp'\'')
+##ax4.imshow(xz)
+##ax4.axis('\''off'\'')
+##yz=mpimg.imread('\''yzplane.bmp'\'')
+##ax5.imshow(yz)
+##ax5.axis('\''off'\'')
+#plt.savefig('\''my_plot.jpg'\'')
+#plt.close() '> plot.py
+#
+#python plot.py
+#cd ..
+mkdir chart 
+cd chart 
+cp ../../../../scripts/runFrames5 ./
+cp ../../../../scripts/Frames5.py ./
+sbatch runFrames5
+cd ..
+cd ..
+fi 

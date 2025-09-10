@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# --- CONFIG ---
+folders=("ALFFIVE" "CALF20" "MIL53NH2" "Zrfcufum")  # fixed extra comma
+sim_run=50          # Simulation length in ns
+partitions=5        # Number of chunks (e.g., 5 => 10 ns each if sim_run=50)
+machine="adastra"   # "adastra" or "chesdens"
+REFRESH_MSD=false   # true => delete & recreate existing MSD/ folders
+
+# --- PATHS / INPUTS ---
+ROOT="$(pwd)"
+INPUTS_MSD_DIR="$ROOT/inputs_msd"
+ADDCO2_PY="addCO2.py"
+SPLIT_SCRIPT="sco2msdparts"
+
+# --- SANITY CHECKS ---
+[[ -d "$INPUTS_MSD_DIR" ]] || { echo "ERROR: Directory '$INPUTS_MSD_DIR' not found."; exit 1; }
+[[ -f "$INPUTS_MSD_DIR/$ADDCO2_PY" ]] || { echo "ERROR: Missing $ADDCO2_PY in '$INPUTS_MSD_DIR'."; exit 1; }
+[[ -f "$INPUTS_MSD_DIR/$SPLIT_SCRIPT" ]] || { echo "ERROR: Missing $SPLIT_SCRIPT in '$INPUTS_MSD_DIR'."; exit 1; }
+
+case "$machine" in
+  adastra|chesdens) ;;
+  *) echo "ERROR: machine must be 'adastra' or 'chesdens' (got '$machine')."; exit 1 ;;
+esac
+
+# Choose python
+if command -v python3 >/dev/null 2>&1; then PY=python3
+elif command -v python  >/dev/null 2>&1; then PY=python
+else echo "ERROR: No Python interpreter found."; exit 1; fi
+
+# Make globs expand to nothing instead of literal patterns
+shopt -s nullglob
+
+# Auto-detect MOF folders if array is empty
+if (( ${#folders[@]} == 0 )); then
+  mapfile -d '' -t folders < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d \
+                               ! -name "scripts" ! -name "all_pols" ! -name "inputs_msd" -print0)
+  for i in "${!folders[@]}"; do folders[$i]="${folders[$i]##*/}"; done
+fi
+
+echo "Config: sim_run=${sim_run} ns, partitions=${partitions}, machine=${machine}"
+
+# --- MAIN LOOP ---
+for folder in "${folders[@]}"; do
+  [[ -d "$folder" ]] || { echo "WARN: MOF folder '$folder' not found. Skipping."; continue; }
+  echo "==> MOF: $folder"
+  pushd "$folder" >/dev/null
+
+  # Gather immediate subdirectories (systems like MOF-POLY_rep)
+  mapfile -d '' -t systems < <(find . -mindepth 1 -maxdepth 1 -type d -print0)
+  if (( ${#systems[@]} == 0 )); then
+    echo "INFO: No subdirectories in $folder."
+    popd >/dev/null
+    continue
+  fi
+
+  for sysdir in "${systems[@]}"; do
+    base="${sysdir#./}"               # e.g., ALFFIVE-6FDA-DAM_1
+    [[ -f "$sysdir/DIM.dcd" ]] || continue  # only process finished MD systems
+
+    echo "--> Setting up MSD for $base"
+    pushd "$sysdir" >/dev/null
+
+    # Prepare/refresh MSD directory
+    if [[ -d MSD ]]; then
+      if [[ "$REFRESH_MSD" == true ]]; then
+        echo "    Refreshing MSD/"
+        rm -rf -- MSD
+        mkdir -p MSD
+      else
+        echo "    MSD/ exists; leaving as-is (set REFRESH_MSD=true to recreate)."
+      fi
+    else
+      mkdir -p MSD
+    fi
+
+    pushd MSD >/dev/null
+
+    # Copy addCO2.py
+    cp -p "$INPUTS_MSD_DIR/$ADDCO2_PY" .
+
+    # Choose CAR file (prefer final; fall back to initial)
+    CAR="../GCMC/T300K-gcmc/P10.00000/output/movies/MonteCarloFinConfig.car"
+    if [[ ! -f "$CAR" ]]; then
+      ALT="../GCMC/T300K-gcmc/P10.00000/output/movies/InitSetConfig.car"
+      if [[ -f "$ALT" ]]; then CAR="$ALT"; else
+        echo "WARN: No CAR file found for $base; expected:"
+        echo "      $CAR"
+        echo "      $ALT"
+        popd >/dev/null; popd >/dev/null
+        continue
+      fi
+    fi
+    cp -p "$CAR" ./MonteCarloFinConfig.car
+
+    # Run addCO2 to place CO2 based on CAR
+    "$PY" "$ADDCO2_PY"
+
+    # Collect required inputs for splitting into parts
+    min_file=(../min.lmps)
+    final_file=(../final-afterreshape4.lmps)
+    in_files=(../in.*)
+    data_files=(../data.*)
+
+    if [[ ! -f "${min_file[0]}" ]]; then
+      echo "WARN: Missing ${min_file[0]} for $base; skipping."
+      popd >/dev/null; popd >/dev/null
+      continue
+    fi
+    if [[ ! -f "${final_file[0]}" ]]; then
+      echo "WARN: Missing ${final_file[0]} for $base; skipping."
+      popd >/dev/null; popd >/dev/null
+      continue
+    fi
+    if (( ${#in_files[@]} == 0 )); then
+      echo "WARN: No '../in.*' files found for $base; proceeding without them."
+    fi
+    if (( ${#data_files[@]} == 0 )); then
+      echo "WARN: No '../data.*' files found for $base; proceeding without them."
+    fi
+
+    # Copy and run the partitioning script
+    cp -p "$INPUTS_MSD_DIR/$SPLIT_SCRIPT" .
+    chmod +x "$SPLIT_SCRIPT"
+
+    ./"$SPLIT_SCRIPT" \
+      "${min_file[@]}" \
+      "${final_file[@]}" \
+      "${in_files[@]}" \
+      "${data_files[@]}" \
+      "$sim_run" "$partitions" "$machine" "$base"
+
+    popd >/dev/null  # MSD
+    popd >/dev/null  # system dir
+  done
+
+  popd >/dev/null  # MOF folder
+done
+
+echo "All done."

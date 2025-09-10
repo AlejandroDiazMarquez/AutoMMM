@@ -1,0 +1,138 @@
+#!/bin/bash
+
+# Print
+echo "
+units           real
+atom_style      full
+dimension        3
+boundary        p p p
+" > reshape.in
+
+pc=$(grep -wns Pair Coeffs $1 | awk  '{$1=$2=$3="";print $0}')
+bc=$(grep -wns Bond Coeffs $1 | awk  '{$1=$2=$3="";print $0}')
+ac=$(grep -wns Angle Coeffs $1 | awk  '{$1=$2=$3="";print $0}')
+dc=$(grep -wns Dihedral Coeffs $1 | awk  '{$1=$2=$3="";print $0}')
+ic=$(grep -wns Improper Coeffs $1 | awk  '{$1=$2=$3="";print $0}')
+
+
+if [ -z "$ic" ]; then
+echo "
+# Style
+pair_style       lj/cut/coul/long 12.0 #$pc 12.0
+pair_modify      mix arithmetic
+kspace_style     pppm 1.0e-4
+bond_style       harmonic #$bc
+angle_style      harmonic #$ac
+dihedral_style   fourier  #$dc
+special_bonds    charmm " >> reshape.in
+else
+echo "
+# Style
+pair_style       lj/cut/coul/long 12.0 #$pc 12.0
+pair_modify      mix arithmetic
+kspace_style     pppm 1.0e-4
+bond_style       harmonic #$bc
+angle_style      harmonic #$ac
+dihedral_style   fourier  #$dc
+improper_style   cvff     #$ic
+special_bonds    charmm " >> reshape.in
+fi
+
+
+xlo=$(grep xlo $3 | awk  '{printf "%5.6f\n", $1}')
+xhi=$(grep xlo $3 | awk  '{printf "%5.6f\n", $2}')
+ylo=$(grep ylo $3 | awk  '{printf "%5.6f\n", $1}')
+yhi=$(grep ylo $3 | awk  '{printf "%5.6f\n", $2}')
+zlo=$(grep zlo $3 | awk  '{printf "%5.6f\n", $1}')
+zhi=$(grep zlo $3 | awk  '{printf "%5.6f\n", $2}')
+zlop1=$(awk "BEGIN { printf \"%.2f\", $zhi + 10 }")
+zhip2=$(awk "BEGIN { printf \"%.2f\", $zhi + 2050 }")
+
+echo "
+#Atom Definition
+read_data       $1" >> reshape.in
+
+echo '
+# Settings
+dielectric       1.0
+neighbor         0.5 bin
+neigh_modify     delay 0 every 1 check yes
+timestep         1
+run_style        verlet
+
+# Output
+thermo_style     custom step vol temp press etotal pe ke evdwl ecoul ebond eangle edihed density
+thermo           $(1000/dt)
+#dump 1 all dcd $(1000/dt) res.dcd
+#dump_modify 1 sort id
+
+# Minimization Step
+min_style        sd
+minimize         1.0e-3 1.0e-3 1000 100000
+min_style        cg
+min_modify       line quadratic
+minimize         1.0e-4 1.0e-4 1000 100000
+
+# equilibration 5steps
+fix 1 all npt temp 300 300 $(100.0*dt) iso 100 100 $(1000.0*dt)
+velocity         all create 300 58531416
+run $(50000/dt) 
+unfix 1 
+
+fix 1 all npt temp 300 300 $(100.0*dt) iso 1000 1000 $(100.0*dt)
+run $(50000/dt) 
+unfix 1
+
+fix 1 all npt temp 600 600 $(100.0*dt) iso 1000 1000 $(100.0*dt)
+velocity         all scale 600
+run $(50000/dt)
+unfix 1
+
+fix 1 all npt temp 600 600 $(100.0*dt) iso 100 100 $(100.0*dt)
+run $(50000/dt)
+unfix 1
+
+fix 1 all npt temp 300 300 $(100.0*dt) iso 100 100 $(100.0*dt)
+velocity         all scale 600
+run $(50000/dt)
+unfix 1
+
+fix 1 all npt temp 300 300 $(100.0*dt) iso 1 1 $(100.0*dt)
+run $(50000/dt)
+unfix 1
+
+write_data       final-equilibrated.lmps' >> reshape.in
+
+echo "
+variable vol equal (xhi-xlo)*(yhi-ylo)*(zhi-zlo)
+variable zmof equal $zhi
+variable x1 equal $xlo 
+variable x2 equal $xhi  
+variable y1 equal $ylo 
+variable y2 equal $yhi 
+variable z1 equal $zlop1
+variable z2 equal $zhip2" >> reshape.in
+
+echo ' 
+variable surf equal  ${vol}/((${x2}-${x1})*(${y2}-${y1})*2)
+variable pos equal ${surf}+${zmof}+50
+variable fpos equal ${surf}*2+${zmof}+100
+
+
+# Redefine Box
+timestep 0.5
+fix 5 all deform 10 x final ${x1} ${x2} y final ${y1} ${y2} z final ${z1} ${z2} remap v
+# NVT MD
+fix              6 all nvt temp 300 300 $(100.0*dt)
+run              $(50000/dt)
+unfix 5
+write_data       final-beforereshape.lmps
+fix 4 all drag NULL NULL ${pos} 3 ${surf}
+run              $(50000/dt)
+#write_data       final-afterreshape.lmps
+unfix 4
+#write_data       final-afterreshape3.lmps
+change_box all x final ${x1} ${x2} y final ${y1} ${y2} z final 0 ${fpos}
+write_data       final-afterreshape4.lmps' >> reshape.in
+sed -i 's"special_bonds    charmm"special_bonds   lj/coul 0.0 0.0 0.5"g' reshape.in
+

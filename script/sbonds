@@ -1,0 +1,102 @@
+#!/bin/bash
+
+rm -r analysis
+file="analysis"
+mkdir $file
+
+nt=$(awk '/atom types/ {print '\$1'}' $1)
+nb=$(awk '/bond types/ {print '\$1'}' $1)
+na=$(awk '/angle types/ {print '\$1'}' $1)
+nd=$(awk '/dihedral types/ {print '\$1'}' $1)
+ni=$(awk '/improper types/ {print '\$1'}' $1)
+
+
+B=$(grep -n "Bonds" $1 | cut -f1 -d:) 
+A=$(grep -n "Angles" $1 | cut -f1 -d:) 
+D=$(grep -n "Dihedrals" $1 | cut -f1 -d:) 
+I=$(grep -n "Impropers" $1 | cut -f1 -d:) 
+
+B1=$(($B+2))
+A1=$(($A-2))
+sed -n "${B1},${A1}p" $1 > $file/bond_information.dat
+
+A1=$(($A+2))
+D1=$(($D-2))
+sed -n "${A1},${D1}p" $1 > $file/angle_information.dat
+
+D1=$(($D+2))
+I1=$(($I-2))
+sed -n "${D1},${I1}p" $1 > $file/dihedral_information.dat
+
+I1=$(($I+2))
+sed -n ''${I1}',$p' $1 > $file/improper_information.dat
+
+nb1=$(($nb+1))
+na1=$(($na+1))
+nd1=$(($nd+1))
+ni1=$(($ni+1))
+
+
+nb1=$(($nb+1))
+na1=$(($na+1))
+nd1=$(($nd+1))
+ni1=$(($ni+1))
+
+echo '#!/usr/bin/env python
+# coding: utf-8
+
+from __future__ import division
+import math 
+import numpy as np
+import mdtraj as md
+import random
+import MDAnalysis as mda
+import matplotlib.pyplot as plt 
+from MDAnalysis import transformations as trans
+import warnings
+warnings.filterwarnings("ignore")
+
+u = mda.Universe("../str.pdb", atom_style="id resid type charge x y z")
+traj          = md.load("../str.pdb",top="../str.pdb") ## Trajectory read in nanometer unit ##
+traj.xyz      = 10*traj.xyz ## change the unit back to angstrom
+traj.unitcell_lengths      = 10*traj.unitcell_lengths ## change the unit back to angstrom
+topology      = traj.topology ## Topology information of the system 
+no_atoms      = traj.n_atoms ## Total number of atoms
+no_residues   = topology.n_residues ## Total number of residues
+no_frames     = traj.n_frames ## Total number of frames
+vol           = traj.unitcell_volumes[0]*1000
+
+atom_type = np.loadtxt("../list.txt", dtype="str")
+
+bond  = np.loadtxt("bond_information.dat")
+angle = np.loadtxt("angle_information.dat")
+total_bond_type='$nb'
+total_angle_type='$na'
+
+for i in range('$na'):
+    var="dist"+str(i+1)+ "= []"
+    exec(var)
+for i in range (len(bond[:,0])):
+    a=md.compute_distances(traj, [[int(bond[i,2])-1,int(bond[i,3])-1]], periodic=True, opt=True)' >$file/Bond_Angle_Dihedral.py
+
+for i in $(seq 1 1 $nb)
+do
+echo " 
+    if bond[i,1] == $i:
+        dist"$i".append(a)" >> $file/Bond_Angle_Dihedral.py
+done 
+
+echo ' 
+for i in range (total_bond_type): ' >> $file/Bond_Angle_Dihedral.py
+
+c=0
+for i in $(seq 1 1 $nb)
+do
+echo "
+    if i == $c:
+        print (\"%f \"%(np.average(dist$i)))" >> $file/Bond_Angle_Dihedral.py
+((c++))
+done
+cd $file
+python Bond_Angle_Dihedral.py >out
+cd ..

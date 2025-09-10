@@ -1,0 +1,42 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=20
+#SBATCH --partition=fun,damp
+#SBATCH --output=slurm.log
+#SBATCH --error=slurm.err
+#SBATCH --time=10000:00:00
+#SBATCH --job-name=runmod
+
+echo "The used cpu number is $SLURM_NTASKS"
+echo "The used node name is $SLURM_JOB_NODELIST"
+echo "The job ID is $SLURM_JOB_ID"
+echo "The job started at $(date)"
+echo "Working directory: $SLURM_SUBMIT_DIR"
+
+# Load necessary modules, if needed
+# module load module_name
+
+cd $SLURM_SUBMIT_DIR
+
+ulimit -s unlimited
+ulimit -m unlimited
+export OMP_NUM_THREADS=1
+
+lammps_2018="/home/adiaz/programs/lammps-2Aug2023/src"
+#mpi="/home/adiaz/anaconda3/bin"
+
+# Run LAMMPS
+./smin
+mpirun -n $SLURM_NTASKS $lammps_2018/lmp_mpi -in min.in > log.min 2>&1
+
+./sreshape pack.lmps data.* min.lmps
+wait
+mpirun -n $SLURM_NTASKS $lammps_2018/lmp_mpi -in reshape.in > log.res 2>&1
+
+./scombine min.lmps final-afterreshape4.lmps in.* data.*
+wait
+mpirun -n $SLURM_NTASKS $lammps_2018/lmp_mpi -in combine.in > log.com 2>&1
+
+./sNPzT data.* combine.lmps
+wait
+mpirun -n $SLURM_NTASKS $lammps_2018/lmp_mpi -in 21zstep.in > log.21s 2>&1
