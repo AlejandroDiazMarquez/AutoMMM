@@ -1,4 +1,4 @@
-# Practical README.txt file with basic usage instructions
+# Practical README_practical.txt file with basic usage instructions
 MOF/Polymer Composites: CO₂ Adsorption & Dynamics Workflow
 ==========================================================
 
